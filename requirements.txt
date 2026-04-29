@@ -165,6 +165,16 @@ output.collect(key, new IntWritable(count));
 
 COMMANDS TO RUN
 
+1. right click on project > build path > configure > add external jar > on left side click hadoop > training > CDH4 > 1st option > share > hadoop > mapreduce > 3rd jar
+
+2. right click on project > export > jar file > type some name (lol.jar) 
+
+now onwards in terminal 
+3. startCDH.sh
+4. nano lol.txt > type some shit 
+5. hadoop fs -put lol.txt lol.txt
+6. hadoop jar lol.jar WCDriver lol.txt loloutput
+7. hadoop fs -cat loloutput/part-80000
 
 ---
 
