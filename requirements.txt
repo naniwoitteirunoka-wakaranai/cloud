@@ -235,4 +235,3 @@ fifa_df.show()
 fifa_df.select("previous_points").show()
 
 spark.stop()
-
