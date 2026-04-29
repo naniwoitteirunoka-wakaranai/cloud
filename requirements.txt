@@ -180,6 +180,21 @@ now onwards in terminal
 
 HDFS COMMANDS
 
+1. open Hadoop training in virtual box
+2. double click on Firefox
+3. click hadoop manager > open all tabs
+4. click browse file directory > user > hadoop 
+
+now onwards in terminal 
+5. startCDH.sh
+6. hdfs dfs -mkdir lol
+7. nano lol.txt
+8. hdfs dfs -put lol.txt /user/hadoop/lol
+9. hdfs dfs -mkdir lmao
+10. hdfs dfs -mv /user/hadoop/lol/lol.txt /user/hadoop/lmao
+11. hdfs dfs -cp /user/hadoop/lmao/lol.txt /user/hadoop/lol
+12. hdfs dfs -rm /user/hadoop/lmao/lol.txt
+13. hdfs dfs -cat /user/hadoop/lol/lol.txt
 
 
 ---
