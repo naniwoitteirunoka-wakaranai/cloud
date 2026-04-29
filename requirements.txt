@@ -227,7 +227,6 @@ schema = StructType([
     StructField("previous_points", FloatType(), True)
 ])
 
-file_path = "/content/fifa_ranking_2022-10-06.csv" 
 fifa_df = spark.read.csv("/content/fifa_ranking_2022-10-06.csv", header=True, schema=schema)
 
 fifa_df.show()
