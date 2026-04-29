@@ -5,7 +5,7 @@ CLOUD STORAGE SIMULATION
 int main() {
  char data[1024];
  // Open a file in write mode. Simulating a cloud storage by using a local file.
- FILE *fptr = fopen("cloud_storage.txt", "w");
+ FILE *fptr = fopen("lol.txt", "w");
  if (fptr == NULL) {
  printf("Error opening the file!\n");
  exit(1);
@@ -17,9 +17,22 @@ int main() {
  fprintf(fptr, "%s", data);
  // Close the file
  fclose(fptr);
- printf("Data successfully saved to 'cloud_storage.txt'\n");
+ printf("Data successfully saved to 'lol.txt'\n");
  return 0;
 }
+
+
+COMMANDS
+
+1. install gcc
+sudo apt update
+sudo apt install build-essential
+2. compile 
+gcc -o lol lol.c
+3. idk??
+./lol
+4. view content of text file
+cat lol.txt
 
 ---
 
