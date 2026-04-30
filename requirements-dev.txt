@@ -31,12 +31,9 @@ JAVA_HOME="/usr/lib/jvm/java-8-openjdk-amd64/jre"
 # Alternative setup to that cursed path
 
 nano ~/.bashrc
-
 export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
 export PATH=$PATH:/usr/local/hadoop/bin:/usr/local/hadoop/sbin
-
 source ~/.bashrc
-
 
 
 sudo adduser hadoopuser
