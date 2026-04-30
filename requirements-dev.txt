@@ -132,5 +132,3 @@ sudo apt remove pdsh
 
 cd /usr/local/hadoop/sbin
 ./start-all.sh
-
-
