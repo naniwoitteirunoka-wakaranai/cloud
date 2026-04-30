@@ -28,6 +28,16 @@ sudo nano /etc/environment
 PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games:/usr/local/games:/usr/local/hadoop/bin:/usr/local/hadoop/sbin"
 JAVA_HOME="/usr/lib/jvm/java-8-openjdk-amd64/jre"
 
+# Alternative setup to that cursed path
+
+nano ~/.bashrc
+
+export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
+export PATH=$PATH:/usr/local/hadoop/bin:/usr/local/hadoop/sbin
+
+source ~/.bashrc
+
+
 
 sudo adduser hadoopuser
 sudo usermod -aG hadoopuser hadoopuser
