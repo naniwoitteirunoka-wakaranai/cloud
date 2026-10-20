@@ -556,24 +556,29 @@ for i,text in enumerate(sentences):
 # invokes calculation when required, and generates the final answer with
 # the agent's execution trace.
 
-!pip install -q langchain-openai langgraph langchain-community duckduckgo-search
+!pip install -q langchain-groq langgraph langchain-community duckduckgo-search
 
 import os
-from langchain_openai import ChatOpenAI
+from langchain_groq import ChatGroq
 from langchain_core.tools import tool
 from langchain_community.tools import DuckDuckGoSearchRun
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
 
-os.environ["OPENAI_API_KEY"] = "YOUR_API_KEY"
+os.environ["GROQ_API_KEY"] = "YOUR_GROQ_API_KEY"
 
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+llm = ChatGroq(
+    model="llama-3.1-8b-instant",
+    temperature=0
+)
 
 @tool
 def calculator(x: str):
     """Calculate an expression."""
-    try: return str(eval(x))
-    except: return "Calculation error"
+    try:
+        return str(eval(x))
+    except:
+        return "Calculation error"
 
 search = DuckDuckGoSearchRun()
 
@@ -599,6 +604,7 @@ You are a coding agent.
 agent = create_react_agent(llm, tools, prompt=prompt, checkpointer=memory)
 
 q = input("Enter query: ")
+
 r = agent.invoke(
     {"messages": [("user", q)]},
     {"configurable": {"thread_id": "lab11"}}
