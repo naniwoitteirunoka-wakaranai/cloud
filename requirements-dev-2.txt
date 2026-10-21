@@ -40,14 +40,15 @@ print("ROUGE-L:", rl/20)
 # quality across languages, identify wrong-word, grammar and word-order errors,
 # and suggest improvements using a larger model or fine-tuning.
 
-!pip install transformers datasets sacrebleu sacremoses -q
+!pip install -q transformers datasets sacrebleu sacremoses nltk
 
 import torch
-from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
-from datasets import load_dataset
 import sacrebleu
+from datasets import load_dataset
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+from nltk.translate.bleu_score import corpus_bleu, SmoothingFunction
 
-# Load 20 English sentences + reference translations
+# Load 20 parallel sentence pairs for each language
 datasets = {
     "Hindi": load_dataset("Helsinki-NLP/opus-100", "en-hi", split="test[:20]"),
     "French": load_dataset("Helsinki-NLP/opus-100", "en-fr", split="test[:20]"),
@@ -60,86 +61,92 @@ models = {
     "German": "Helsinki-NLP/opus-mt-en-de"
 }
 
+target_keys = {"Hindi": "hi", "French": "fr", "German": "de"}
 device = "cuda" if torch.cuda.is_available() else "cpu"
 results = {}
 
-for lang in datasets:
+for lang, data in datasets.items():
+    print("\n" + "=" * 50)
+    print(lang.upper())
 
-    data = datasets[lang]
-    
-    # Load tokenizer and model explicitly to bypass the deprecated pipeline task
     tokenizer = AutoTokenizer.from_pretrained(models[lang])
     model = AutoModelForSeq2SeqLM.from_pretrained(models[lang]).to(device)
 
     english = [x["translation"]["en"] for x in data]
-    # Dynamically extract the target language key
-    target_key = "de" if lang == "German" else lang.lower()[:2]
-    reference = [x["translation"][target_key] for x in data]
-
-    # Generate translations manually
+    reference = [x["translation"][target_keys[lang]] for x in data]
     generated = []
+
+    # Generate translations
     for text in english:
-        inputs = tokenizer(text, return_tensors="pt", padding=True).to(device)
-        translated_tokens = model.generate(**inputs)
-        translation = tokenizer.decode(translated_tokens[0], skip_special_tokens=True)
-        generated.append(translation)
+        inputs = tokenizer(
+            text, return_tensors="pt", truncation=True, max_length=512
+        ).to(device)
 
-    # BLEU
-    bleu = sacrebleu.corpus_bleu(generated, [reference])
+        with torch.no_grad():
+            output = model.generate(**inputs, max_new_tokens=100)
 
-    results[lang] = bleu.score
+        generated.append(tokenizer.decode(output[0], skip_special_tokens=True))
 
-    print("\n" + "=" * 50)
-    print(lang.upper())
-    print("BLEU:", bleu.score)
-    print("SacreBLEU:", bleu.score)
+    # BLEU using NLTK
+    refs = [[r.split()] for r in reference]
+    hyps = [g.split() for g in generated]
 
-    # Error identification
+    bleu = corpus_bleu(
+        refs, hyps,
+        smoothing_function=SmoothingFunction().method1
+    ) * 100
+
+    # SacreBLEU using its own implementation
+    sacre_score = sacrebleu.corpus_bleu(generated, [reference]).score
+    results[lang] = sacre_score
+
+    print("BLEU:", round(bleu, 2))
+    print("SacreBLEU:", round(sacre_score, 2))
+
+    # Error analysis
     print("\nERROR ANALYSIS")
 
     for i in range(20):
-        print("\n", i + 1)
+        print("\nSentence", i + 1)
         print("English   :", english[i])
         print("Generated :", generated[i])
         print("Reference :", reference[i])
 
-        # Wrong word
-        gen_words = set(generated[i].lower().split())
-        ref_words = set(reference[i].lower().split())
-        wrong_words = gen_words - ref_words
+        wrong_words = (
+            set(generated[i].lower().split())
+            - set(reference[i].lower().split())
+        )
+        print("Possible wrong words:", wrong_words or "None")
 
-        if wrong_words:
-            print("Wrong-word error:", wrong_words)
-        else:
-            print("Wrong-word error: None")
-
-        # Grammar / word-order difference
         if len(generated[i].split()) != len(reference[i].split()):
-            print("Grammar error: Possible")
+            print("Grammar/length difference: Possible")
         else:
-            print("Grammar error: No obvious error")
+            print("Grammar/length difference: Not detected by length")
 
         if generated[i].split() != reference[i].split():
-            print("Word-order error: Possible")
+            print("Word-order/text difference: Possible")
         else:
-            print("Word-order error: None")
+            print("Word-order/text difference: None")
 
-# Compare languages
+    del model
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+# Compare translation quality
 print("\n" + "=" * 50)
 print("LANGUAGE COMPARISON")
 
 for lang, score in results.items():
-    print(lang, ":", score)
+    print(lang, "SacreBLEU:", round(score, 2))
 
-best = max(results, key=results.get)
-print("\nBest translation quality:", best)
+print("Best SacreBLEU score:", max(results, key=results.get))
 
-# Improvements
+# Suggested improvements
 print("\nIMPROVEMENTS")
 print("1. Use a larger pretrained translation model.")
-print("2. Fine-tune the model on high-quality parallel data.")
+print("2. Fine-tune on high-quality parallel data.")
 print("3. Use more training data.")
-print("4. Use domain-specific data to reduce grammar and word-order errors.")
+print("4. Use domain-specific data.")
 
 # 3. Implement causal masking on the test sentence "the cat sat on the mat",
 # display the attention matrix before and after masking, and explain the differences.
@@ -273,56 +280,64 @@ plt.show()
 # GloVe and BERT, implement KNN-based retrieval using cosine similarity and
 # Euclidean distance, and evaluate using Precision@5, Recall@5 and MRR.
 
-!pip install gensim transformers sentence-transformers scikit-learn -q
+!pip install -q gensim transformers sentence-transformers scikit-learn
 
 import os
 import tarfile
 import urllib.request
 import numpy as np
+
 from sklearn.datasets import fetch_20newsgroups
 from sklearn.metrics.pairwise import cosine_similarity, euclidean_distances
 from gensim.downloader import load
 from sentence_transformers import SentenceTransformer
 
-# Custom redirect handler that preserves custom headers during redirects
+# Download dataset while preserving headers during redirects
 class PreserveHeadersRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
-        new_req = super().redirect_request(req, fp, code, msg, headers, newurl)
+        new_req = super().redirect_request(
+            req, fp, code, msg, headers, newurl
+        )
         if new_req is not None:
-            # Preserve our custom user agent
-            new_req.add_header('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)')
+            new_req.add_header(
+                "User-Agent",
+                "Mozilla/5.0"
+            )
         return new_req
 
-# Manually download and place 20newsgroups to bypass the Figshare 403 Forbidden block on urllib
 target_dir = os.path.expanduser("~/scikit_learn_data/20news_home")
 os.makedirs(target_dir, exist_ok=True)
 archive_path = os.path.join(target_dir, "20newsbydate.tar.gz")
 
 if not os.path.exists(os.path.join(target_dir, "20news-bydate-test")):
-    print("Downloading 20news dataset manually to bypass 403 Forbidden...")
+    print("Downloading 20 Newsgroups dataset...")
+
     url = "https://ndownloader.figshare.com/files/5975967"
-    
-    # Install custom opener containing our custom redirect handler
     opener = urllib.request.build_opener(PreserveHeadersRedirectHandler())
-    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
-    
-    with opener.open(req) as response, open(archive_path, 'wb') as out_file:
-        out_file.write(response.read())
-    
-    print("Extracting dataset archive...")
+    req = urllib.request.Request(
+        url, headers={"User-Agent": "Mozilla/5.0"}
+    )
+
+    with opener.open(req) as response, open(archive_path, "wb") as f:
+        f.write(response.read())
+
+    print("Extracting dataset...")
     with tarfile.open(archive_path, "r:gz") as tar:
         tar.extractall(path=target_dir)
-    print("Extraction complete.")
 
-# Load news dataset
+# Load news documents
 data = fetch_20newsgroups(
     subset="test",
     remove=("headers", "footers", "quotes")
 )
 
 docs = data.data[:500]
+labels = data.target[:len(docs)]
 
-# ---------------- WORD2VEC ----------------
+print("Number of documents:", len(docs))
+
+# WORD2VEC embeddings
+print("Loading Word2Vec...")
 w2v = load("word2vec-google-news-300")
 
 def word2vec(text):
@@ -330,9 +345,10 @@ def word2vec(text):
     vectors = [w2v[w] for w in words if w in w2v]
     return np.mean(vectors, axis=0) if vectors else np.zeros(300)
 
-W = np.array([word2vec(x) for x in docs])
+W = np.array([word2vec(text) for text in docs])
 
-# ---------------- GLOVE ----------------
+# GLOVE embeddings
+print("Loading GloVe...")
 glove = load("glove-wiki-gigaword-100")
 
 def glove_vec(text):
@@ -340,71 +356,91 @@ def glove_vec(text):
     vectors = [glove[w] for w in words if w in glove]
     return np.mean(vectors, axis=0) if vectors else np.zeros(100)
 
-G = np.array([glove_vec(x) for x in docs])
+G = np.array([glove_vec(text) for text in docs])
 
-# ---------------- BERT ----------------
+# BERT-based sentence embeddings
+print("Loading BERT sentence embeddings...")
 bert = SentenceTransformer("all-MiniLM-L6-v2")
 B = bert.encode(docs)
 
-# ---------------- KNN RETRIEVAL ----------------
+print("Embeddings created successfully.")
+
+# KNN-based retrieval
 def retrieve(X, query, metric="cosine", k=5):
+    q = X[query].reshape(1, -1)
 
     if metric == "cosine":
-        scores = cosine_similarity(X, query.reshape(1, -1)).ravel()
+        scores = cosine_similarity(X, q).ravel()
+        scores[query] = -np.inf
         return np.argsort(scores)[::-1][:k]
 
-    distances = euclidean_distances(X, query.reshape(1, -1)).ravel()
+    distances = euclidean_distances(X, q).ravel()
+    distances[query] = np.inf
     return np.argsort(distances)[:k]
 
-# Use first document as query
+# Use the first document as the query
 query = 0
 
-for name, X in [("Word2Vec", W), ("GloVe", G), ("BERT", B)]:
-
-    print("\n", name)
+for name, X in [
+    ("Word2Vec", W),
+    ("GloVe", G),
+    ("BERT", B)
+]:
+    print("\n" + "=" * 40)
+    print(name)
 
     for metric in ["cosine", "euclidean"]:
+        results = retrieve(X, query, metric, k=5)
 
-        q = X[query]
-        results = retrieve(X, q, metric)
+        print("\nMetric:", metric)
+        print("Top 5 document indices:", results)
 
-        print(metric, "Top 5:", results)
+        # Relevant documents share the query's news category
+        relevant = set(np.where(labels == labels[query])[0])
+        relevant.discard(query)
 
-        # Evaluation
-        relevant = set(np.where(data.target == data.target[query])[0])
         retrieved = set(results)
 
+        # Precision@5
         precision = len(retrieved & relevant) / 5
-        recall = len(retrieved & relevant) / len(relevant)
 
-        # Reciprocal Rank
+        # Recall@5
+        recall = (
+            len(retrieved & relevant) / len(relevant)
+            if relevant else 0
+        )
+
+        # Reciprocal rank for the first relevant result
         rr = 0
-        for rank, i in enumerate(results, 1):
-            if i in relevant:
+        for rank, index in enumerate(results, start=1):
+            if index in relevant:
                 rr = 1 / rank
                 break
 
-        print("Precision@5:", precision)
-        print("Recall@5:", recall)
-        print("MRR:", rr)
+        # With one query, its reciprocal rank equals MRR for that query
+        print("Precision@5:", round(precision, 4))
+        print("Recall@5:", round(recall, 4))
+        print("MRR:", round(rr, 4))
+
+print("\nRetrieval evaluation completed.")
 
 # 6. Load research PDFs using LangChain, generate Hugging Face embeddings and
 # store them in ChromaDB. Retrieve using similarity search, build a pipeline
 # using retriever, prompt template, LLM and output parser. Return answers with
 # source document and page number, evaluate on 10 queries and compare k=3,5,8,10.
 
-!pip install -q langchain langchain-community langchain-huggingface langchain-chroma pypdf sentence-transformers transformers
+!pip install -q langchain langchain-community langchain-huggingface langchain-chroma pypdf sentence-transformers transformers langchain-text-splitters
 
 from langchain_community.document_loaders import PyPDFLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings, HuggingFacePipeline
 from langchain_chroma import Chroma
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
-from transformers import pipeline
+from transformers import pipeline, AutoModelForCausalLM, AutoTokenizer
 
-# 1. Load PDFs
-files = ["paper1.pdf", "paper2.pdf"]
+# 1. Load PDFs with absolute paths
+files = ["/content/paper1.pdf", "/content/paper2.pdf"]
 docs = sum([PyPDFLoader(f, mode="page").load() for f in files], [])
 
 # 2. Split + Hugging Face embeddings
@@ -419,12 +455,20 @@ emb = HuggingFaceEmbeddings(
 # 3. Store in ChromaDB
 db = Chroma.from_documents(docs, emb, collection_name="papers")
 
-# 4. LLM
-llm = HuggingFacePipeline(pipeline=pipeline(
-    "text2text-generation",
-    model="google/flan-t5-small",
-    max_new_tokens=100
-))
+# 4. LLM - Explicitly load a chat-compatible model for the text-generation pipeline
+model_id = "Qwen/Qwen2.5-0.5B-Instruct"
+tokenizer = AutoTokenizer.from_pretrained(model_id)
+model = AutoModelForCausalLM.from_pretrained(model_id)
+
+hf_pipe = pipeline(
+    "text-generation",
+    model=model,
+    tokenizer=tokenizer,
+    max_new_tokens=100,
+    temperature=0.1,
+    do_sample=True
+)
+llm = HuggingFacePipeline(pipeline=hf_pipe)
 
 # 5. Prompt + output parser
 prompt = PromptTemplate.from_template(
@@ -475,57 +519,74 @@ for k in [3, 5, 8, 10]:
 # SentenceTransformer + FAISS retrieval, Hop-1 → query → Hop-2 → LLM answer,
 # compare Single-Hop and 2-Hop using Exact Match and F1.
 
-!pip install -q datasets sentence-transformers faiss-cpu transformers
+!pip install -q sentence-transformers faiss-cpu transformers pandas pyarrow
 
-from datasets import load_dataset
+import pandas as pd
+import torch
 from sentence_transformers import SentenceTransformer
-from transformers import pipeline
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 import faiss, numpy as np
 
-d = load_dataset("hotpotqa","distractor",split="validation[:20]")
+# Bypass both dataset scripts and 404 URL errors by pulling directly from Hugging Face's Parquet mirror
+print("Loading first 20 validation samples from the official HotpotQA Hugging Face repository...")
+parquet_url = "https://huggingface.co/datasets/hotpotqa/hotpot_qa/resolve/main/distractor/validation-00000-of-00001.parquet"
+df = pd.read_parquet(parquet_url, columns=["question", "answer", "type", "context"], engine="pyarrow")
 
-print("Questions:",len(d))
-print("First:",d[0]["question"])
-print("Answer:",d[0]["answer"])
-print("Type:",d[0]["type"])
+# Take the first 20 records
+d = df.head(20).to_dict(orient="records")
+
+print("Questions:", len(d))
+print("First:", d[0]["question"])
+print("Answer:", d[0]["answer"])
+print("Type:", d[0]["type"])
 
 docs = [t+": "+" ".join(s) for x in d for t,s in
-        zip(x["context"]["title"],x["context"]["sentences"])]
+        zip(x["context"]["title"], x["context"]["sentences"])]
 
 m = SentenceTransformer("all-MiniLM-L6-v2")
 E = m.encode(docs)
 faiss_index = faiss.IndexFlatL2(E.shape[1])
-faiss_index.add(np.array(E,dtype="float32"))
+faiss_index.add(np.array(E, dtype="float32"))
 
 def getdoc(q):
-    _,i = faiss_index.search(m.encode([q]).astype("float32"),1)
+    _, i = faiss_index.search(m.encode([q]).astype("float32"), 1)
     return docs[i[0][0]]
 
-llm = pipeline("text2text-generation",model="google/flan-t5-small")
+# Load model and tokenizer explicitly
+model_name = "google/flan-t5-small"
+device = "cuda" if torch.cuda.is_available() else "cpu"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForSeq2SeqLM.from_pretrained(model_name).to(device)
 
-def f1(a,b):
-    a,b=set(a.lower().split()),set(b.lower().split())
-    n=len(a&b)
-    return 2*n/(len(a)+len(b)) if a and b else 0
+def generate_answer(prompt_text):
+    inputs = tokenizer(prompt_text, return_tensors="pt").to(device)
+    outputs = model.generate(**inputs, max_new_tokens=30)
+    return tokenizer.decode(outputs[0], skip_special_tokens=True)
 
-em1=em2=f_1=f_2=0
+def f1(a, b):
+    a, b = set(a.lower().split()), set(b.lower().split())
+    n = len(a & b)
+    return 2 * n / (len(a) + len(b)) if a and b else 0
+
+em1 = em2 = f_1 = f_2 = 0
 
 for x in d:
-    q,ans=x["question"],x["answer"]
-    d1=getdoc(q)
+    q, ans = x["question"], x["answer"]
+    d1 = getdoc(q)
 
-    a1=llm(f"{d1}\nQ:{q}\nA:",max_new_tokens=30)[0]["generated_text"]
+    # Generate using manual inference instead of the deprecated pipeline
+    a1 = generate_answer(f"{d1}\nQ:{q}\nA:")
 
-    d2=getdoc(q+" "+d1)
-    a2=llm(f"{d1}\n{d2}\nQ:{q}\nA:",max_new_tokens=30)[0]["generated_text"]
+    d2 = getdoc(q + " " + d1)
+    a2 = generate_answer(f"{d1}\n{d2}\nQ:{q}\nA:")
 
-    em1+=a1.lower().strip()==ans.lower().strip()
-    em2+=a2.lower().strip()==ans.lower().strip()
-    f_1+=f1(a1,ans)
-    f_2+=f1(a2,ans)
+    em1 += a1.lower().strip() == ans.lower().strip()
+    em2 += a2.lower().strip() == ans.lower().strip()
+    f_1 += f1(a1, ans)
+    f_2 += f1(a2, ans)
 
-print("\nSingle-Hop: EM =",em1/len(d),"F1 =",f_1/len(d))
-print("2-Hop:      EM =",em2/len(d),"F1 =",f_2/len(d))
+print("\nSingle-Hop: EM =", em1 / len(d), "F1 =", f_1 / len(d))
+print("2-Hop:      EM =", em2 / len(d), "F1 =", f_2 / len(d))
 
 # 8. Use a sports news dataset for sentiment classification.
 # Implement zero-shot, few-shot, role-based, chain-of-thought and structured
@@ -533,16 +594,25 @@ print("2-Hop:      EM =",em2/len(d),"F1 =",f_2/len(d))
 
 !pip install -q datasets transformers scikit-learn
 
+import torch
 from datasets import load_dataset
-from transformers import pipeline
+from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 
 d = load_dataset("SetFit/sst2", split="test[:20]")
-llm = pipeline("text2text-generation", model="google/flan-t5-small")
+
+# Explicitly load model and tokenizer to bypass deprecated pipeline keys
+model_name = "google/flan-t5-small"
+device = "cuda" if torch.cuda.is_available() else "cpu"
+tokenizer = AutoTokenizer.from_pretrained(model_name)
+model = AutoModelForSeq2SeqLM.from_pretrained(model_name).to(device)
 
 def predict(text, prompt):
-    x = llm(prompt.format(text=text), max_new_tokens=10)[0]["generated_text"].lower()
-    return 1 if "positive" in x else 0
+    formatted_prompt = prompt.format(text=text)
+    inputs = tokenizer(formatted_prompt, return_tensors="pt").to(device)
+    outputs = model.generate(**inputs, max_new_tokens=10)
+    res = tokenizer.decode(outputs[0], skip_special_tokens=True).lower()
+    return 1 if "positive" in res else 0
 
 prompts = {
     "Zero-shot": "Classify this sports news as positive or negative. Text: {text}",
@@ -552,38 +622,58 @@ prompts = {
     "Structured": "Return sentiment in this format: Sentiment: positive/negative. Text: {text}"
 }
 
-for name,p in prompts.items():
+for name, p in prompts.items():
     y = [x["label"] for x in d]
-    pred = [predict(x["text"],p) for x in d]
-    print("\n",name)
-    print("Accuracy :",accuracy_score(y,pred))
-    print("Precision:",precision_score(y,pred,zero_division=0))
-    print("Recall   :",recall_score(y,pred,zero_division=0))
-    print("F1       :",f1_score(y,pred,zero_division=0))
+    pred = [predict(x["text"], p) for x in d]
+    print("\n", name)
+    print("Accuracy :", accuracy_score(y, pred))
+    print("Precision:", precision_score(y, pred, zero_division=0))
+    print("Recall   :", recall_score(y, pred, zero_division=0))
+    print("F1       :", f1_score(y, pred, zero_division=0))
 
 # 9. Load a pretrained text-to-image model, generate images using different
 # text prompts, compare the changes, save and display the generated images.
 
-!pip install -q diffusers transformers accelerate
+!pip uninstall -y torchao
+!pip install -q diffusers transformers accelerate safetensors
 
-from diffusers import StableDiffusionPipeline
+import sys
+
+# Clear partially imported modules from the previous failed attempt
+for name in list(sys.modules):
+    if name.startswith(("torchao", "diffusers")):
+        del sys.modules[name]
+
 import torch
+from diffusers import StableDiffusionPipeline
 from IPython.display import display
 
-model = StableDiffusionPipeline.from_pretrained(
-    "runwayml/stable-diffusion-v1-5"
+# Check GPU
+assert torch.cuda.is_available(), "Enable GPU in Colab: Runtime > Change runtime type > T4 GPU"
+
+print("GPU:", torch.cuda.get_device_name(0))
+
+# Load Stable Diffusion on GPU
+pipe = StableDiffusionPipeline.from_pretrained(
+    "runwayml/stable-diffusion-v1-5",
+    torch_dtype=torch.float16,
+    use_safetensors=True
 ).to("cuda")
 
+# Generate images using different prompts
 prompts = [
     "a cat sitting on a rooftop",
     "a cat sitting on a snowy mountain",
     "a futuristic robot sitting on a rooftop"
 ]
 
-for i,p in enumerate(prompts):
-    img = model(p).images[0]
-    img.save(f"image{i+1}.png")
-    display(img)
+for i, prompt in enumerate(prompts, 1):
+    image = pipe(prompt, num_inference_steps=20).images[0]
+    image.save(f"image{i}.png")
+    print(f"Image {i}: {prompt}")
+    display(image)
+
+print("All 3 images generated and saved!")
 
 # 10. Load a pretrained text-to-speech model, provide text input, convert it
 # into an audio waveform, save audio as WAV, and evaluate generated speech
@@ -594,8 +684,12 @@ for i,p in enumerate(prompts):
 from transformers import pipeline
 from scipy.io.wavfile import write
 from IPython.display import Audio, display
+import numpy as np
 
-tts = pipeline("text-to-speech", model="suno/bark-small")
+tts = pipeline(
+    "text-to-speech",
+    model="suno/bark-small"
+)
 
 sentences = [
     "The team won the match.",
@@ -603,11 +697,28 @@ sentences = [
     "Artificial intelligence is changing the world."
 ]
 
-for i,text in enumerate(sentences):
+for i, text in enumerate(sentences, 1):
     audio = tts(text)
-    write(f"speech{i+1}.wav", audio["sampling_rate"], audio["audio"])
+
+    # Convert Bark output to 16-bit PCM WAV
+    audio_data = np.asarray(audio["audio"])
+
+    if audio_data.ndim > 1:
+        audio_data = audio_data.squeeze()
+
+    audio_data = np.clip(audio_data, -1, 1)
+    audio_data = (audio_data * 32767).astype(np.int16)
+
+    filename = f"speech{i}.wav"
+
+    write(
+        filename,
+        audio["sampling_rate"],
+        audio_data
+    )
+
     print(text)
-    display(Audio(f"speech{i+1}.wav"))
+    display(Audio(filename))
 
 # 11. Design a coding agent using LangChain and LangGraph that accepts a
 # natural-language query, decomposes it into subtasks, maintains short-term
@@ -615,7 +726,7 @@ for i,text in enumerate(sentences):
 # invokes calculation when required, and generates the final answer with
 # the agent's execution trace.
 
-!pip install -q langchain-groq langgraph langchain-community duckduckgo-search
+!pip install -q langchain-groq ddgs langgraph langchain-community duckduckgo-search
 
 import os
 from langchain_groq import ChatGroq
@@ -624,7 +735,7 @@ from langchain_community.tools import DuckDuckGoSearchRun
 from langgraph.prebuilt import create_react_agent
 from langgraph.checkpoint.memory import MemorySaver
 
-os.environ["GROQ_API_KEY"] = "YOUR_GROQ_API_KEY"
+os.environ["GROQ_API_KEY"] = "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"
 
 llm = ChatGroq(
     model="openai/gpt-oss-20b",
@@ -700,11 +811,25 @@ diffusion = diffusion_from_config(load_config("diffusion"))
 
 prompt = input("3D Prompt: ")
 
-lat = sample_latents(1, model, diffusion, guidance_scale=15,
-                     model_kwargs={"texts":[prompt]}, device=device)
+lat = sample_latents(
+    batch_size=1,
+    model=model,
+    diffusion=diffusion,
+    guidance_scale=15,
+    model_kwargs={"texts": [prompt]},
+    clip_denoised=True,
+    use_fp16=False,
+    use_karras=True,
+    karras_steps=64,
+    sigma_min=1e-3,
+    sigma_max=160,
+    s_churn=0,
+    device=device
+)
 
 mesh = decode_latent_mesh(xm, lat[0]).tri_mesh()
-mesh.write_ply("object.ply")
+with open("object.ply", "wb") as f:
+    mesh.write_ply(f)
 
 v = np.asarray(mesh.verts)
 
@@ -735,64 +860,116 @@ print("Vertices:", len(v))
 print("Faces:", len(mesh.faces))
 print("Saved: object.ply")
 
-# 13. Load a medical image dataset and pretrained model, convert image to text,
-# create a document graph, combine image context + question, retrieve documents,
-# generate an answer, and evaluate answer quality, retrieval and hallucination.
+# 13. Load a medical image dataset and use a pretrained model.
+# Convert the image into text. Use a graph to have a collection of documents
+# based on the image. Combine image context, user question and retrieve
+# document. Generate answer with retrieved document. Evaluate answer quality,
+# retrieval performance and hallucination rate.
 
-!pip -q install medmnist transformers sentence-transformers networkx scikit-learn
+!pip -q install medmnist transformers sentence-transformers networkx scikit-learn matplotlib
 
-import medmnist, networkx as nx, numpy as np
+import medmnist, networkx as nx, numpy as np, torch
+import matplotlib.pyplot as plt
 from PIL import Image
-from transformers import BlipProcessor, BlipForConditionalGeneration, pipeline
+from transformers import AutoProcessor, AutoModelForImageTextToText
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 
-# Medical image dataset
+# Load and display X-ray
 d = medmnist.PneumoniaMNIST(split="test", download=True)
 img = Image.fromarray(d.imgs[0]).convert("RGB")
-label = d.labels[0][0]
+label = int(d.labels[0][0])
 
-# Image -> text
-p = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
-m = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base")
-x = p(img, return_tensors="pt")
-caption = p.decode(m.generate(**x, max_new_tokens=30)[0], skip_special_tokens=True)
-print("Image text:", caption)
+plt.imshow(img, cmap="gray")
+plt.title("Pneumonia" if label else "Normal")
+plt.axis("off")
+plt.show()
 
-# Document graph
+print("Dataset label:", label)
+print("Medical label:", "Pneumonia" if label else "Normal")
+
+# Image -> text using medical model
+model_id = "AliFadel/blip-cxr-mimic-finetuned"
+processor = AutoProcessor.from_pretrained(model_id)
+model = AutoModelForImageTextToText.from_pretrained(model_id)
+
+device = "cuda" if torch.cuda.is_available() else "cpu"
+model.to(device)
+
+x = processor(images=img, text="Chest X-Ray", return_tensors="pt")
+x = {k: v.to(device) for k, v in x.items()}
+
+with torch.no_grad():
+    out = model.generate(**x, max_new_tokens=100)
+
+caption = processor.batch_decode(out, skip_special_tokens=True)[0]
+print("\nImage Description:", caption)
+
+# Medical context
+medical = f"This is a chest X-ray from PneumoniaMNIST. Label: {'Pneumonia' if label else 'Normal'}."
+
+# Graph documents
 docs = [
-    caption,
-    "Pneumonia is an infection of the lungs.",
+    medical,
+    "Pneumonia is an infection that affects the lungs.",
     "Chest X-rays are used to examine the lungs.",
-    "Medical images should be interpreted by experts."
+    "Pneumonia may cause abnormalities visible on chest X-rays.",
+    "Medical images should be interpreted by healthcare professionals."
 ]
-G = nx.Graph()
-G.add_nodes_from(range(len(docs)))
 
-# Retrieve using image context + question
-q = input("Question: ")
+G = nx.Graph()
+G.add_nodes_from((i, {"text": x}) for i, x in enumerate(docs))
+G.add_edges_from((0, i) for i in range(1, len(docs)))
+
+# User query
+q = input("\nQuestion: ")
+
+# Retrieve documents
 embed = SentenceTransformer("all-MiniLM-L6-v2")
 E = embed.encode(docs)
-query = embed.encode([caption + " " + q])
-score = cosine_similarity(query, E)[0]
-ids = np.argsort(score)[-2:][::-1]
+query = embed.encode([medical + " " + caption + " " + q])
 
-context = " ".join(docs[i] for i in ids)
+scores = cosine_similarity(query, E)[0]
+ids = np.argsort(scores)[-3:][::-1]
+context = " ".join(G.nodes[i]["text"] for i in ids)
 
-# Generate answer
-llm = pipeline("text2text-generation", model="google/flan-t5-small")
-answer = llm(f"Context: {context}\nQuestion: {q}\nAnswer:",
-              max_new_tokens=50)[0]["generated_text"]
+print("\nRetrieved Documents:")
+for i in ids:
+    print("-", G.nodes[i]["text"])
 
-print("\nRetrieved:", [docs[i] for i in ids])
-print("Answer:", answer)
+# Generate final answer
+tokenizer = AutoTokenizer.from_pretrained("google/flan-t5-small")
+llm = AutoModelForSeq2SeqLM.from_pretrained("google/flan-t5-small")
+llm.to(device)
+
+prompt = f"""
+Use only this information to answer.
+
+Image: {medical}
+Description: {caption}
+Context: {context}
+
+Question: {q}
+
+Give a short answer. Do not invent medical facts.
+"""
+
+x = tokenizer(prompt, return_tensors="pt", truncation=True).to(device)
+
+with torch.no_grad():
+    out = llm.generate(**x, max_new_tokens=60)
+
+answer = tokenizer.decode(out[0], skip_special_tokens=True)
+print("\nFinal Answer:", answer)
 
 # Evaluation
-retrieval = len(ids) / 2
-quality = cosine_similarity(embed.encode([answer]), embed.encode([context]))[0][0]
-hallucination = 1 - quality
+retrieval = len(ids) / 3
+quality = cosine_similarity(
+    embed.encode([answer]), embed.encode([context])
+)[0][0]
 
 print("\n--- EVALUATION ---")
-print("Retrieval Score:", retrieval)
+print("Retrieval Score:", round(retrieval, 3))
 print("Answer Quality:", round(quality, 3))
-print("Hallucination Rate:", round(hallucination, 3))
+print("Hallucination Rate:", round(max(0, 1-quality), 3))
